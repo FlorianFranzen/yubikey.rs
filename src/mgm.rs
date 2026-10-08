@@ -159,7 +159,14 @@ impl MgmAlgorithmId {
 
     /// Looks up the algorithm for the given Yubikey's current management key.
     fn query(txn: &Transaction<'_>) -> Result<Self> {
-        match txn.get_metadata(crate::piv::SlotId::Management(ManagementSlotId::Management)) {
+        Self::from_metadata(
+            txn.get_metadata(crate::piv::SlotId::Management(ManagementSlotId::Management)),
+        )
+    }
+
+    /// Maps the management slot's metadata to its algorithm.
+    fn from_metadata(metadata: Result<crate::piv::SlotMetadata>) -> Result<Self> {
+        match metadata {
             Ok(metadata) => match metadata.algorithm {
                 SlotAlgorithmId::Management(alg) => Ok(alg),
                 // We specifically queried the management key slot; getting a known
@@ -242,9 +249,18 @@ impl MgmKey {
 
     /// Gets the default management key for the given Yubikey's firmware version.
     ///
+    /// Devices reporting a version beyond the YubiKey range are asked for the algorithm
+    /// in their management slot's metadata instead, which is the factory one until the
+    /// management key is changed. There, an AES-128 or AES-256 key in the slot makes this
+    /// return `Error::NotSupported`, and firmware without metadata support gets 3DES.
+    ///
     /// Returns an error if the Yubikey's default algorithm is unsupported.
-    pub fn get_default(yubikey: &YubiKey) -> Result<Self> {
-        match MgmAlgorithmId::default_for_version(yubikey.version()) {
+    pub fn get_default(yubikey: &mut YubiKey) -> Result<Self> {
+        let alg = match yubikey.version() {
+            Version { major: 6.., .. } => MgmAlgorithmId::query(&yubikey.begin_transaction()?)?,
+            version => MgmAlgorithmId::default_for_version(version),
+        };
+        match alg {
             MgmAlgorithmId::ThreeDes => Ok(Self(MgmKeyKind::Tdes(DEFAULT_MGM_KEY.into()))),
             MgmAlgorithmId::Aes192 => Ok(Self(MgmKeyKind::Aes192(DEFAULT_MGM_KEY.into()))),
             _ => Err(Error::NotSupported),
@@ -1017,5 +1033,38 @@ impl DeviceFlags {
         let (i, _) = eof(i)?;
 
         Ok((i, v))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MgmAlgorithmId;
+    use crate::{
+        Error,
+        piv::{SlotAlgorithmId, SlotMetadata},
+    };
+
+    fn management(alg: MgmAlgorithmId) -> SlotMetadata {
+        SlotMetadata {
+            algorithm: SlotAlgorithmId::Management(alg),
+            policy: None,
+            origin: None,
+            public: None,
+            default: None,
+            retries: None,
+        }
+    }
+
+    #[test]
+    fn algorithm_from_metadata() {
+        let from = MgmAlgorithmId::from_metadata;
+        assert_eq!(
+            from(Ok(management(MgmAlgorithmId::Aes192))),
+            Ok(MgmAlgorithmId::Aes192)
+        );
+        assert_eq!(from(Err(Error::NotSupported)), Ok(MgmAlgorithmId::ThreeDes));
+        assert_eq!(from(Err(Error::AlgorithmError)), Err(Error::NotSupported));
+        // A malformed record must not pass for 3DES
+        assert_eq!(from(Err(Error::ParseError)), Err(Error::ParseError));
     }
 }

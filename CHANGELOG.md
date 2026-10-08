@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - MSRV is now 1.81.
+- `YubiKey::open` accepts firmware major version 6 ([#680]).
+- `MgmKey::get_default` reads the management key algorithm from the slot's metadata
+  for firmware versions beyond the YubiKey range ([#680]).
+- A `GET METADATA` success without a record is reported as `Error::NotSupported`
+  ([#680]).
 - Migrated the public API to the following (pre-release) dependencies:
   - `der 0.8.0-rc.1`
   - `ecdsa 0.17.0-pre.9`
@@ -46,6 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `impl AsRef<[u8]> for MgmKey` instead).
   - `impl Default for MgmKey` (use `MgmKey::get_default` instead).
   - `impl TryFrom<&[u8]> for MgmKey` (use `MgmKey::from_bytes` instead).
+
+[#680]: https://github.com/iqlusioninc/yubikey.rs/pull/680
 
 ## 0.8.0 (2023-08-15)
 ### Added

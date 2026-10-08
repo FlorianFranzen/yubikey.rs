@@ -136,8 +136,8 @@ impl<'tx> Transaction<'tx> {
                 response.data().try_into()
             }
 
-            // YK5 implements getting the serial as a PIV applet command (0xf8)
-            5 => {
+            // YK5 and later implement getting the serial as a PIV applet command (0xf8)
+            5 | 6 => {
                 let response = Apdu::new(Ins::GetSerial).transmit(self, 0xFF)?;
 
                 if !response.is_success() {
@@ -162,16 +162,7 @@ impl<'tx> Transaction<'tx> {
             .p2(slot.into())
             .transmit(self, CB_OBJ_MAX)?;
 
-        match response.status_words() {
-            StatusWords::Success => {
-                let buf = Buffer::new(response.data().into());
-                piv::SlotMetadata::try_from(buf)
-            }
-            StatusWords::ReferenceDataNotFoundError => Err(Error::NotFound),
-            // Requires firmware 5.2.3
-            StatusWords::NotSupportedError => Err(Error::NotSupported),
-            _ => Err(Error::GenericError),
-        }
+        parse_metadata(response)
     }
 
     /// Verify device PIN.
@@ -592,5 +583,59 @@ impl<'tx> Transaction<'tx> {
 
         let data = response.data();
         DeviceInfo::parse(data)
+    }
+}
+
+/// Maps a `GET METADATA` response to the slot's metadata.
+fn parse_metadata(response: Response) -> Result<piv::SlotMetadata> {
+    match response.status_words() {
+        // Some non-YubiKey firmware acknowledges `GET METADATA` without implementing it
+        StatusWords::Success if response.data().is_empty() => Err(Error::NotSupported),
+        StatusWords::Success => {
+            let buf = Buffer::new(response.data().into());
+            piv::SlotMetadata::try_from(buf)
+        }
+        StatusWords::ReferenceDataNotFoundError => Err(Error::NotFound),
+        // Requires firmware 5.2.3
+        StatusWords::NotSupportedError => Err(Error::NotSupported),
+        _ => Err(Error::GenericError),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_metadata;
+    use crate::{
+        Error,
+        apdu::{Response, StatusWords},
+        mgm::MgmAlgorithmId,
+        piv::{SlotAlgorithmId, SlotMetadata},
+    };
+
+    #[test]
+    fn empty_metadata_is_not_supported() {
+        let response = Response::new(StatusWords::Success, vec![]);
+        assert!(matches!(parse_metadata(response), Err(Error::NotSupported)));
+    }
+
+    #[test]
+    fn management_metadata() {
+        // 3DES, default PIN policy, touch never, factory default key
+        let data = vec![0x01, 0x01, 0x03, 0x02, 0x02, 0x00, 0x01, 0x05, 0x01, 0x01];
+        let response = Response::new(StatusWords::Success, data);
+        assert!(matches!(
+            parse_metadata(response),
+            Ok(SlotMetadata {
+                algorithm: SlotAlgorithmId::Management(MgmAlgorithmId::ThreeDes),
+                default: Some(true),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn truncated_metadata_is_a_parse_error() {
+        let response = Response::new(StatusWords::Success, vec![0x01, 0x02, 0x03]);
+        assert!(matches!(parse_metadata(response), Err(Error::ParseError)));
     }
 }
