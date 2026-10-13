@@ -48,6 +48,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `GET VERSION` reply shorter than three bytes, or a `GET METADATA` record with an
   empty algorithm, is an error instead of a panic ([#680]).
 - Ed25519 certificates are signed over the certificate itself, not its SHA-512 digest.
+- Ed25519 certificates are signed over the certificate itself, not its SHA-512 digest
+  ([#683]).
+- Signing a 255-byte message no longer panics, and messages up to 3062 bytes, the most a
+  YubiKey's 3072-byte command buffer takes, are accepted ([#683]).
+- `PrehashSigner` for Ed25519 returns an error instead of signing the digest as the
+  message ([#683]).
 
 ### Removed
 - `yubikey::mgm`:
@@ -60,6 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [#680]: https://github.com/iqlusioninc/yubikey.rs/pull/680
 [#674]: https://github.com/iqlusioninc/yubikey.rs/issues/674
+[#683]: https://github.com/iqlusioninc/yubikey.rs/pull/683
 
 ## 0.8.0 (2023-08-15)
 ### Added
