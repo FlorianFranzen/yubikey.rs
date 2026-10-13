@@ -327,8 +327,9 @@ pub mod yubikey_signer {
             Ok(input.to_vec())
         }
 
-        fn prepare_prehash(hashed: &[u8]) -> SigResult<Vec<u8>> {
-            Ok(hashed.to_vec())
+        // There is no Ed25519ph in PIV: signing a digest would sign it as the message
+        fn prepare_prehash(_hashed: &[u8]) -> SigResult<Vec<u8>> {
+            Err(signature::Error::new())
         }
 
         fn read_signature(input: &[u8]) -> SigResult<Self::Signature> {

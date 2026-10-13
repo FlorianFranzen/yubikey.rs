@@ -281,7 +281,9 @@ impl<'tx> Transaction<'tx> {
         decipher: bool,
     ) -> Result<Buffer> {
         let in_len = sign_in.len();
-        let mut indata = [0u8; 1024];
+        // An Ed25519 message is a whole certificate or CSR, so the body may fill the card's
+        // buffer; `transfer_data` chains it in short APDUs
+        let mut indata = [0u8; CB_BUF_MAX];
         let templ = [0, Ins::Authenticate.code(), algorithm.into(), key.into()];
 
         match algorithm {
@@ -334,7 +336,7 @@ impl<'tx> Transaction<'tx> {
 
         let bytes = if in_len < 0x80 {
             1
-        } else if in_len < 0xff {
+        } else if in_len < 0x100 {
             2
         } else {
             3

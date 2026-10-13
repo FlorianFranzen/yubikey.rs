@@ -39,7 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Metadata command returns `Error:NotFound` instead of `Error::GenericError` when the object doesn't exist ([#558]).
 
 ### Fixed
-- Ed25519 certificates are signed over the certificate itself, not its SHA-512 digest.
+- Ed25519 certificates are signed over the certificate itself, not its SHA-512 digest
+  ([#683]).
+- Signing a 255-byte message no longer panics, and messages up to 3062 bytes, the most a
+  YubiKey's 3072-byte command buffer takes, are accepted ([#683]).
+- `PrehashSigner` for Ed25519 returns an error instead of signing the digest as the
+  message ([#683]).
 
 ### Removed
 - `yubikey::mgm`:
@@ -49,6 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `impl AsRef<[u8]> for MgmKey` instead).
   - `impl Default for MgmKey` (use `MgmKey::get_default` instead).
   - `impl TryFrom<&[u8]> for MgmKey` (use `MgmKey::from_bytes` instead).
+
+[#683]: https://github.com/iqlusioninc/yubikey.rs/pull/683
 
 ## 0.8.0 (2023-08-15)
 ### Added
