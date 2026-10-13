@@ -79,6 +79,11 @@ pub(crate) const APPLET_NAME: &str = "PIV";
 /// PIV Applet ID
 pub(crate) const APPLET_ID: &[u8] = &[0xa0, 0x00, 0x00, 0x03, 0x08];
 
+/// The full PIV AID of SP 800-73, with the PIX naming the PIV application and its version
+pub(crate) const APPLET_ID_FULL: &[u8] = &[
+    0xa0, 0x00, 0x00, 0x03, 0x08, 0x00, 0x00, 0x10, 0x00, 0x01, 0x00,
+];
+
 const CB_ECC_POINTP256: usize = 65;
 const CB_ECC_POINTP384: usize = 97;
 
@@ -1037,7 +1042,8 @@ impl TryFrom<Buffer> for SlotMetadata {
             |acc: Result<SlotMetadata>, tlv| match acc {
                 Ok(mut metadata) => match tlv.tag {
                     1 => {
-                        metadata.algorithm = SlotAlgorithmId::try_from(tlv.value[0])?;
+                        let algorithm = *tlv.value.first().ok_or(Error::ParseError)?;
+                        metadata.algorithm = SlotAlgorithmId::try_from(algorithm)?;
                         Ok(metadata)
                     }
                     2 => {
