@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - A `GET VERSION` reply shorter than three bytes, or a `GET METADATA` record with an
   empty algorithm, is an error instead of a panic ([#680]).
+- Ed25519 certificates are signed over the certificate itself, not its SHA-512 digest.
 
 ### Removed
 - `yubikey::mgm`:
