@@ -94,7 +94,9 @@ const TAG_ECC_POINT: u8 = 0x86;
 /// OID for ed25519 and x25519 algorithms
 pub const OID_X25519: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.110");
 
-const KEYDATA_LEN: usize = 1024;
+// Room for the largest import, RSA-4096: five 256-byte CRT parameters, each behind a
+// one-byte tag and a three-byte length, followed by the pin and touch policy TLVs.
+const KEYDATA_LEN: usize = 5 * (1 + 3 + 256) + 2 * 3;
 
 const KEYDATA_RSA_EXP: u64 = 65537;
 
@@ -748,20 +750,42 @@ fn write_key(
     touch_policy: TouchPolicy,
     algorithm: AlgorithmId,
 ) -> Result<()> {
-    let mut key_data = Buffer::new(vec![0u8; KEYDATA_LEN]);
+    let key_data = serialize_key(params, pin_policy, touch_policy, algorithm)?;
     let templ = [0, Ins::ImportKey.code(), algorithm.into(), slot.into()];
+
+    let txn = yubikey.begin_transaction()?;
+
+    let status_words = txn.transfer_data(&templ, &key_data, 256)?.status_words();
+
+    match status_words {
+        StatusWords::Success => Ok(()),
+        StatusWords::SecurityStatusError => Err(Error::AuthenticationError),
+        _ => Err(Error::GenericError),
+    }
+}
+
+/// Serializes key parameters and policies into the body of an import key command.
+fn serialize_key(
+    params: Vec<&[u8]>,
+    pin_policy: PinPolicy,
+    touch_policy: TouchPolicy,
+    algorithm: AlgorithmId,
+) -> Result<Buffer> {
+    let mut key_data = Buffer::new(vec![0u8; KEYDATA_LEN]);
     let mut offset = 0;
 
     let elem_len = algorithm.get_elem_len();
     let param_tag = algorithm.get_param_tag();
 
     for (i, param) in params.into_iter().enumerate() {
+        // Parameters come from the caller, so an oversized one is an error, not a panic.
+        let padding = elem_len.checked_sub(param.len()).ok_or(Error::SizeError)?;
+
         offset += Tlv::write_as(
             &mut key_data[offset..],
             param_tag + (i as u8),
             elem_len,
             |buf| {
-                let padding = elem_len - param.len();
                 for b in &mut buf[..padding] {
                     *b = 0;
                 }
@@ -773,17 +797,8 @@ fn write_key(
     offset += pin_policy.write(&mut key_data[offset..])?;
     offset += touch_policy.write(&mut key_data[offset..])?;
 
-    let txn = yubikey.begin_transaction()?;
-
-    let status_words = txn
-        .transfer_data(&templ, &key_data[..offset], 256)?
-        .status_words();
-
-    match status_words {
-        StatusWords::Success => Ok(()),
-        StatusWords::SecurityStatusError => Err(Error::AuthenticationError),
-        _ => Err(Error::GenericError),
-    }
+    key_data.truncate(offset);
+    Ok(key_data)
 }
 
 /// The key data that makes up an RSA key.
@@ -849,7 +864,7 @@ impl RsaKeyData {
     }
 
     fn total_len(&self) -> usize {
-        self.p.len() + self.q.len() + self.dp.len() + self.qinv.len()
+        self.p.len() + self.q.len() + self.dp.len() + self.dq.len() + self.qinv.len()
     }
 }
 
@@ -1338,5 +1353,84 @@ impl From<SlotAlgorithmId> for u8 {
             SlotAlgorithmId::Management(oth) => oth.into(),
             SlotAlgorithmId::Asymmetric(oth) => oth.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The primes of a throwaway RSA-4096 key, generated with OpenSSL for this test.
+    const RSA4096_P: &str = concat!(
+        "ce365b27246a24e71bcb97bc5c767c3f6fafe25b759e1b93fb4bc934a4cf9b21",
+        "e93b75dc06b78d7687d67b1c8f11ac2c13937322bfceb01d859affe94f843655",
+        "81a1b0d6c971323ec7123dcf319c11d9c71f2f90c5a49e65118adf710a76bd64",
+        "37b2303318f213968ac362fa077118322ea6a9788ffd8f1dfb49b3fb20c0e33d",
+        "754bdcb894b5e8144cd30215b7adccec4115d714b1ca75036ad3c36a435cb37e",
+        "c0ad530a44e83a7a4bd9aede118d623554501b0c86064771ec1917677d358e99",
+        "08b560607080b244775ffc2da751a7b9da3eec31f4bda93c2e027617fc73533d",
+        "b890b6da3f802f0f12aa016b71effdbdf9c0c896b5e8fe4f0258ef1947610dd9",
+    );
+    const RSA4096_Q: &str = concat!(
+        "c7a02b6f7d6b2dfdfed27af080692c3aeb9eac0e5d4fbed7123dca0e7f6dc1d6",
+        "7e8a2b0da5b404568ad08e7241e63ea12de2d1e273578b88f80a0e3fbfa9b843",
+        "bb00342c3169101b8a60fccbe3d84784acc303e9a24e56ff588165f7334594d0",
+        "d428ef5a9b857a8cdbe59d9356f4c10ffa6d86bb5c5c07ec95cc90e1dd310f39",
+        "8207de30ef41157374ea0a81eac0e9f93bf775b4e173d67ef1ce008f48595ee7",
+        "c95737a760c18a58f0e55af6161902d54e5d67d91030dc37552215ef3895c646",
+        "25297f5f89635a31d2bad4b394929c62491a590a1786ec460c59f4e07d5259b3",
+        "b1c3126871595b400fa361b1bac48e181f5c43d354c1f03b2f315f399d2a7097",
+    );
+
+    #[test]
+    fn rsa4096_import_fits() -> Result<()> {
+        let p = hex::lower::decode_vec(RSA4096_P).expect("valid hex");
+        let q = hex::lower::decode_vec(RSA4096_Q).expect("valid hex");
+        let key = RsaKeyData::new(&p, &q)?;
+        assert_eq!(key.total_len(), 5 * 256);
+
+        let params = vec![
+            key.p.as_slice(),
+            key.q.as_slice(),
+            key.dp.as_slice(),
+            key.dq.as_slice(),
+            key.qinv.as_slice(),
+        ];
+        let key_data = serialize_key(
+            params,
+            PinPolicy::Once,
+            TouchPolicy::Always,
+            AlgorithmId::Rsa4096,
+        )?;
+        assert_eq!(key_data.len(), KEYDATA_LEN);
+
+        let mut rest = key_data.as_slice();
+        for tag in 0x01..=0x05 {
+            let (next, tlv) = Tlv::parse(rest)?;
+            assert_eq!(tlv.tag, tag);
+            assert_eq!(tlv.value.len(), 256);
+            if tag == 0x01 {
+                assert_eq!(tlv.value, p.as_slice());
+            }
+            rest = next;
+        }
+        for (tag, policy) in [(0xaa, 2), (0xab, 2)] {
+            let (next, tlv) = Tlv::parse(rest)?;
+            assert_eq!((tlv.tag, tlv.value), (tag, [policy].as_slice()));
+            rest = next;
+        }
+        assert!(rest.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn oversized_param_is_rejected() {
+        let result = serialize_key(
+            vec![&[0xff; 33]],
+            PinPolicy::Default,
+            TouchPolicy::Default,
+            AlgorithmId::EccP256,
+        );
+        assert!(matches!(result, Err(Error::SizeError)));
     }
 }
