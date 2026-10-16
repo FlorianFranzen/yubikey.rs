@@ -42,7 +42,7 @@ use crate::{
     transaction::Transaction,
 };
 use cipher::common::getrandom::SysRng;
-use log::{error, info};
+use log::{debug, error, info};
 use pcsc::Card;
 use rand_core::TryRng;
 use std::{
@@ -211,6 +211,7 @@ pub struct YubiKey {
     pub(crate) pin: Option<CachedPin>,
     pub(crate) version: Version,
     pub(crate) serial: Serial,
+    pub(crate) properties: Option<Box<piv::ApplicationProperties>>,
 }
 
 impl fmt::Debug for YubiKey {
@@ -346,6 +347,7 @@ impl YubiKey {
             pin,
             version,
             serial,
+            properties,
         } = self;
 
         card.disconnect(disposition).map_err(|(card, e)| {
@@ -356,6 +358,7 @@ impl YubiKey {
                     pin,
                     version,
                     serial,
+                    properties,
                 },
                 e.into(),
             )
@@ -371,6 +374,16 @@ impl YubiKey {
     /// Get the name of the associated PC/SC card reader.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// What the PIV application announced when it was selected on open: its identifier,
+    /// label and URL, and on cards that list them the algorithms they support.
+    ///
+    /// `None` if the card answered SELECT without a template this crate can read. A YubiKey
+    /// sends only the identifiers, so its [`piv::ApplicationProperties::supports`] answers
+    /// `None` and its firmware version is the guide instead.
+    pub fn piv_application_properties(&self) -> Option<&piv::ApplicationProperties> {
+        self.properties.as_deref()
     }
 
     /// Get the YubiKey's PIV application version.
@@ -739,13 +752,13 @@ impl<'a> TryFrom<&'a Reader<'_>> for YubiKey {
 
         info!("connected to reader: {}", reader.name());
 
-        let mut app_version_serial = || -> Result<(Version, Serial)> {
+        let mut app_version_serial = || -> Result<(Version, Serial, Vec<u8>)> {
             let txn = Transaction::new(&mut card)?;
-            txn.select_piv_application()?;
+            let selected = txn.select_piv_application()?;
 
             let v = txn.get_version()?;
             let s = txn.get_serial(v)?;
-            Ok((v, s))
+            Ok((v, s, selected))
         };
 
         match app_version_serial() {
@@ -762,13 +775,20 @@ impl<'a> TryFrom<&'a Reader<'_>> for YubiKey {
 
                 Err(e)
             }
-            Ok((version, serial)) => {
+            Ok((version, serial, selected)) => {
+                // Informational: a card that answers SELECT with no template, or with one
+                // this crate cannot read, is still a card to talk to
+                let properties = piv::ApplicationProperties::parse(&selected)
+                    .inspect_err(|_| debug!("no readable PIV application property template"))
+                    .ok()
+                    .map(Box::new);
                 let yubikey = YubiKey {
                     card,
                     name: String::from(reader.name()),
                     pin: None,
                     version,
                     serial,
+                    properties,
                 };
 
                 Ok(yubikey)
