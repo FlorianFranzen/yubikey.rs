@@ -61,11 +61,15 @@ impl<'tx> Transaction<'tx> {
 
     /// Select PIV application.
     pub fn select_piv_application(&self) -> Result<()> {
-        self.select_application(
-            piv::APPLET_ID,
-            piv::APPLET_NAME,
-            "failed selecting application",
-        )
+        // YubiKeys answer to the RID alone; other implementations only to the full PIV AID
+        // of SP 800-73, so that is tried when the RID is not found
+        let response = match self.send_select(piv::APPLET_ID)? {
+            response if response.status_words() == StatusWords::NotFoundError => {
+                self.send_select(piv::APPLET_ID_FULL)?
+            }
+            response => response,
+        };
+        check_select(response, piv::APPLET_NAME, "failed selecting application")
     }
 
     /// Select application.
@@ -75,21 +79,15 @@ impl<'tx> Transaction<'tx> {
         applet_name: &'static str,
         error: &'static str,
     ) -> Result<()> {
-        let response = Apdu::new(Ins::SelectApplication)
+        check_select(self.send_select(applet)?, applet_name, error)
+    }
+
+    fn send_select(&self, applet: &[u8]) -> Result<Response> {
+        Apdu::new(Ins::SelectApplication)
             .p1(0x04)
             .data(applet)
             .transmit(self, 0xFF)
-            .inspect_err(|e| error!("failed communicating with card: '{}'", e))?;
-
-        if !response.is_success() {
-            error!("{}: {:04x}", error, response.status_words().code());
-            return Err(match response.status_words() {
-                StatusWords::NotFoundError => Error::AppletNotFound { applet_name },
-                _ => Error::GenericError,
-            });
-        }
-
-        Ok(())
+            .inspect_err(|e| error!("failed communicating with card: '{}'", e))
     }
 
     /// Get the version of the PIV application installed on the YubiKey.
@@ -97,7 +95,7 @@ impl<'tx> Transaction<'tx> {
         // get version from device
         let response = Apdu::new(Ins::GetVersion).transmit(self, 261)?;
 
-        if !response.is_success() || response.data().is_empty() {
+        if !response.is_success() || response.data().len() < 3 {
             return Err(Error::GenericError);
         }
 
@@ -136,8 +134,8 @@ impl<'tx> Transaction<'tx> {
                 response.data().try_into()
             }
 
-            // YK5 implements getting the serial as a PIV applet command (0xf8)
-            5 => {
+            // YK5 and later implement getting the serial as a PIV applet command (0xf8)
+            5 | 6 => {
                 let response = Apdu::new(Ins::GetSerial).transmit(self, 0xFF)?;
 
                 if !response.is_success() {
@@ -162,16 +160,7 @@ impl<'tx> Transaction<'tx> {
             .p2(slot.into())
             .transmit(self, CB_OBJ_MAX)?;
 
-        match response.status_words() {
-            StatusWords::Success => {
-                let buf = Buffer::new(response.data().into());
-                piv::SlotMetadata::try_from(buf)
-            }
-            StatusWords::ReferenceDataNotFoundError => Err(Error::NotFound),
-            // Requires firmware 5.2.3
-            StatusWords::NotSupportedError => Err(Error::NotSupported),
-            _ => Err(Error::GenericError),
-        }
+        parse_metadata(response)
     }
 
     /// Verify device PIN.
@@ -592,5 +581,78 @@ impl<'tx> Transaction<'tx> {
 
         let data = response.data();
         DeviceInfo::parse(data)
+    }
+}
+
+/// Maps a `SELECT` response to the outcome of selecting `applet_name`.
+fn check_select(response: Response, applet_name: &'static str, error: &'static str) -> Result<()> {
+    if !response.is_success() {
+        error!("{}: {:04x}", error, response.status_words().code());
+        return Err(match response.status_words() {
+            StatusWords::NotFoundError => Error::AppletNotFound { applet_name },
+            _ => Error::GenericError,
+        });
+    }
+
+    Ok(())
+}
+
+/// Maps a `GET METADATA` response to the slot's metadata.
+fn parse_metadata(response: Response) -> Result<piv::SlotMetadata> {
+    match response.status_words() {
+        // Some non-YubiKey firmware acknowledges `GET METADATA` without implementing it
+        StatusWords::Success if response.data().is_empty() => Err(Error::NotSupported),
+        StatusWords::Success => {
+            let buf = Buffer::new(response.data().into());
+            piv::SlotMetadata::try_from(buf)
+        }
+        StatusWords::ReferenceDataNotFoundError => Err(Error::NotFound),
+        // Requires firmware 5.2.3
+        StatusWords::NotSupportedError => Err(Error::NotSupported),
+        _ => Err(Error::GenericError),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_metadata;
+    use crate::{
+        Error,
+        apdu::{Response, StatusWords},
+        mgm::MgmAlgorithmId,
+        piv::{SlotAlgorithmId, SlotMetadata},
+    };
+
+    #[test]
+    fn empty_metadata_is_not_supported() {
+        let response = Response::new(StatusWords::Success, vec![]);
+        assert!(matches!(parse_metadata(response), Err(Error::NotSupported)));
+    }
+
+    #[test]
+    fn management_metadata() {
+        // 3DES, default PIN policy, touch never, factory default key
+        let data = vec![0x01, 0x01, 0x03, 0x02, 0x02, 0x00, 0x01, 0x05, 0x01, 0x01];
+        let response = Response::new(StatusWords::Success, data);
+        assert!(matches!(
+            parse_metadata(response),
+            Ok(SlotMetadata {
+                algorithm: SlotAlgorithmId::Management(MgmAlgorithmId::ThreeDes),
+                default: Some(true),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn truncated_metadata_is_a_parse_error() {
+        let response = Response::new(StatusWords::Success, vec![0x01, 0x02, 0x03]);
+        assert!(matches!(parse_metadata(response), Err(Error::ParseError)));
+    }
+
+    #[test]
+    fn empty_algorithm_is_a_parse_error() {
+        let response = Response::new(StatusWords::Success, vec![0x01, 0x00]);
+        assert!(matches!(parse_metadata(response), Err(Error::ParseError)));
     }
 }
