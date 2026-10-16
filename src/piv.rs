@@ -73,6 +73,9 @@ use crate::consts::CB_OBJ_MAX;
 
 use rsa::{RsaPrivateKey, traits::PrivateKeyParts};
 
+mod properties;
+pub use properties::ApplicationProperties;
+
 /// PIV Applet Name
 pub(crate) const APPLET_NAME: &str = "PIV";
 

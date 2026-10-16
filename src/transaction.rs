@@ -59,8 +59,8 @@ impl<'tx> Transaction<'tx> {
         Ok(recv_buffer)
     }
 
-    /// Select PIV application.
-    pub fn select_piv_application(&self) -> Result<()> {
+    /// Select PIV application, returning the application property template it answers with.
+    pub fn select_piv_application(&self) -> Result<Vec<u8>> {
         self.select_application(
             piv::APPLET_ID,
             piv::APPLET_NAME,
@@ -68,13 +68,13 @@ impl<'tx> Transaction<'tx> {
         )
     }
 
-    /// Select application.
+    /// Select application, returning the data of its response.
     pub fn select_application(
         &self,
         applet: &[u8],
         applet_name: &'static str,
         error: &'static str,
-    ) -> Result<()> {
+    ) -> Result<Vec<u8>> {
         let response = Apdu::new(Ins::SelectApplication)
             .p1(0x04)
             .data(applet)
@@ -89,7 +89,7 @@ impl<'tx> Transaction<'tx> {
             });
         }
 
-        Ok(())
+        Ok(response.data().to_vec())
     }
 
     /// Get the version of the PIV application installed on the YubiKey.
