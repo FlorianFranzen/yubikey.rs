@@ -276,7 +276,7 @@ pub mod yubikey_signer {
         asn1::{Any, OctetString},
         oid::db::rfc5912,
     };
-    use sha2::{Digest, Sha256, Sha384, Sha512};
+    use sha2::{Digest, Sha256, Sha384};
     use signature::Keypair;
     use std::{cell::RefCell, fmt, io::Write, marker::PhantomData};
     use x509_cert::spki::{
@@ -322,12 +322,14 @@ pub mod yubikey_signer {
         type VerifyingKey = ed25519_dalek::VerifyingKey;
         type PublicKey = ed25519_dalek::VerifyingKey;
 
+        // PIV Ed25519 is PureEdDSA: the card hashes the message itself
         fn prepare(input: &[u8]) -> SigResult<Vec<u8>> {
-            Ok(Sha512::digest(input).to_vec())
+            Ok(input.to_vec())
         }
 
-        fn prepare_prehash(hashed: &[u8]) -> SigResult<Vec<u8>> {
-            Ok(hashed.to_vec())
+        // There is no Ed25519ph in PIV: signing a digest would sign it as the message
+        fn prepare_prehash(_hashed: &[u8]) -> SigResult<Vec<u8>> {
+            Err(signature::Error::new())
         }
 
         fn read_signature(input: &[u8]) -> SigResult<Self::Signature> {
