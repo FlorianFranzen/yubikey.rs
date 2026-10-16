@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `yubikey::certificate::SelfSigned`
 - `yubikey::Error::CertificateBuilder`
 - `yubikey::MgmAlgorithmId`
+  - `MgmAlgorithmId::current` ([#674])
 - `yubikey::mgm`:
   - `MgmKey::generate_for`
   - `MgmKey::get_default`
@@ -57,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `impl TryFrom<&[u8]> for MgmKey` (use `MgmKey::from_bytes` instead).
 
 [#680]: https://github.com/iqlusioninc/yubikey.rs/pull/680
+[#674]: https://github.com/iqlusioninc/yubikey.rs/issues/674
 
 ## 0.8.0 (2023-08-15)
 ### Added
