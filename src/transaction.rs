@@ -59,8 +59,8 @@ impl<'tx> Transaction<'tx> {
         Ok(recv_buffer)
     }
 
-    /// Select PIV application.
-    pub fn select_piv_application(&self) -> Result<()> {
+    /// Select PIV application, returning the application property template it answers with.
+    pub fn select_piv_application(&self) -> Result<Vec<u8>> {
         // YubiKeys answer to the RID alone; other implementations only to the full PIV AID
         // of SP 800-73, so that is tried when the RID is not found
         let response = match self.send_select(piv::APPLET_ID)? {
@@ -72,13 +72,13 @@ impl<'tx> Transaction<'tx> {
         check_select(response, piv::APPLET_NAME, "failed selecting application")
     }
 
-    /// Select application.
+    /// Select application, returning the data of its response.
     pub fn select_application(
         &self,
         applet: &[u8],
         applet_name: &'static str,
         error: &'static str,
-    ) -> Result<()> {
+    ) -> Result<Vec<u8>> {
         check_select(self.send_select(applet)?, applet_name, error)
     }
 
@@ -587,7 +587,11 @@ impl<'tx> Transaction<'tx> {
 }
 
 /// Maps a `SELECT` response to the outcome of selecting `applet_name`.
-fn check_select(response: Response, applet_name: &'static str, error: &'static str) -> Result<()> {
+fn check_select(
+    response: Response,
+    applet_name: &'static str,
+    error: &'static str,
+) -> Result<Vec<u8>> {
     if !response.is_success() {
         error!("{}: {:04x}", error, response.status_words().code());
         return Err(match response.status_words() {
@@ -596,7 +600,7 @@ fn check_select(response: Response, applet_name: &'static str, error: &'static s
         });
     }
 
-    Ok(())
+    Ok(response.data().to_vec())
 }
 
 /// Maps a `GET METADATA` response to the slot's metadata.
